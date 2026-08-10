@@ -1,0 +1,1 @@
+{"version":3,"file":"budgetService.d.ts","sourceRoot":"","sources":["../../src/services/budgetService.ts"],"names":[],"mappings":"AAGA,MAAM,WAAW,WAAW;IAC1B,QAAQ,EAAE,MAAM,CAAA;IAChB,aAAa,EAAE,MAAM,CAAA;CACtB;AAED,eAAO,MAAM,aAAa;iBACL,MAAM;mBASJ,MAAM,SAAS,WAAW;eAU9B,MAAM,UAAU,MAAM;CASxC,CAAA"}
