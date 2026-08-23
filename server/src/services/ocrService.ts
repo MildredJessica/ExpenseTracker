@@ -10,22 +10,15 @@ export interface ParsedReceipt {
   confidence: number
 }
 
-const AMOUNT_PATTERNS = [
-  /(?:total|amount|due|pay|charged?|balance|grand\s*total)[^\d]*\$?([\d,]+\.?\d{0,2})/i,
-  /\$\s*([\d,]+\.\d{2})/g,
-  /(?:^\s*|\s)([\d,]+\.\d{2})\s*$/m,
-]
-
 const DATE_PATTERNS = [
+  /(\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2})/,
   /(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4})/,
   /([A-Z][a-z]{2,8}\.?\s+\d{1,2},?\s+\d{4})/i,
-  /(\d{4}[\/\-\.]\d{1,2}[\/\-\.]\d{1,2})/,
 ]
 
-const MERCHANT_PATTERNS = [
-  /^([A-Z][A-Z\s&'\.]+)\s*$/m,
-  /(?:store|restaurant|cafe|shop|market|station|hotel|pharmacy|inc|llc|ltd)[:\s]+([^\n]+)/i,
-]
+// Lines that are common receipt boilerplate, never the store name
+const NON_MERCHANT_LINE =
+  /receipt|invoice|welcome|thank|order|cashier|cash|change|total|subtotal|tax|vat|visa|master|amex|discover|debit|credit|card|payment|approved|customer|copy|tel[:\s]|phone|fax|www\.|\.com|http|street|avenue|blvd|suite|date|time|server|table|guest|check\b|item|qty|price|balance|due|refund|transaction|terminal|merchant\s*id|auth/i
 
 async function preprocessImage(buffer: Buffer): Promise<Buffer> {
   return sharp(buffer)
@@ -36,24 +29,67 @@ async function preprocessImage(buffer: Buffer): Promise<Buffer> {
     .toBuffer()
 }
 
-function parseText(rawText: string): Omit<ParsedReceipt, 'raw_text' | 'confidence'> {
-  const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean)
-  let amount: number | undefined
-  let date: string | undefined
-  let merchant: string | undefined
+function moneyValues(text: string): number[] {
+  const out: number[] = []
+  for (const m of text.matchAll(/(\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2})/g)) {
+    const v = parseFloat(m[1].replace(/,/g, ''))
+    if (!isNaN(v) && v > 0 && v < 100000) out.push(v)
+  }
+  return out
+}
 
-  for (const pattern of AMOUNT_PATTERNS) {
-    const regex = new RegExp(pattern.source, pattern.flags)
-    const match = rawText.match(regex)
-    if (match) {
-      const parsed = parseFloat(match[1].replace(/,/g, ''))
-      if (!isNaN(parsed) && parsed > 0 && parsed < 100000) {
-        amount = parsed
-        break
-      }
+function extractAmount(lines: string[]): number | undefined {
+  const isSubtotal = (l: string) => /sub\s*[-–.]?\s*total/i.test(l)
+  // Strong keywords almost always label the grand total; weaker ones as second pass
+  const keywordPasses = [
+    /grand\s*total|total\s*due|amount\s*due|balance\s*due|total\s*amount|amount\s*paid|to\s*pay|charged/i,
+    /total|balance|amount/i,
+  ]
+
+  // Scan bottom-up: the grand total sits below subtotal/tax/line items
+  for (const re of keywordPasses) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]
+      if (isSubtotal(line) || !re.test(line)) continue
+      const sameLine = moneyValues(line)
+      if (sameLine.length) return sameLine[sameLine.length - 1]
+      // OCR sometimes splits the label and value onto separate lines
+      const nextLine = i + 1 < lines.length ? moneyValues(lines[i + 1]) : []
+      if (nextLine.length) return nextLine[0]
     }
   }
 
+  // Last resort: the largest money value (total >= subtotal, tax and any line item)
+  const all = moneyValues(lines.join('\n'))
+  return all.length ? Math.max(...all) : undefined
+}
+
+function extractMerchant(lines: string[]): string | undefined {
+  // The store name is virtually always within the first few lines of a receipt
+  for (const line of lines.slice(0, 6)) {
+    const cleaned = line.replace(/[^A-Za-z0-9&'.\- ]/g, ' ').replace(/\s+/g, ' ').trim()
+    const letters = (cleaned.match(/[A-Za-z]/g) ?? []).length
+    if (letters < 3 || cleaned.length < 3 || cleaned.length > 40) continue
+    if (NON_MERCHANT_LINE.test(cleaned)) continue
+    if (/^[\d\s\-()#.]+$/.test(cleaned)) continue
+    // Normalize SHOUTING receipt headers to title case
+    if (cleaned === cleaned.toUpperCase()) {
+      return cleaned
+        .toLowerCase()
+        .replace(/(^|[\s\-&.])([a-z])/g, (_, sep, ch) => sep + ch.toUpperCase())
+    }
+    return cleaned
+  }
+  return undefined
+}
+
+export function parseText(rawText: string): Omit<ParsedReceipt, 'raw_text' | 'confidence'> {
+  const lines = rawText.split('\n').map((l) => l.trim()).filter(Boolean)
+
+  const amount = extractAmount(lines)
+  const merchant = extractMerchant(lines)
+
+  let date: string | undefined
   for (const pattern of DATE_PATTERNS) {
     const match = rawText.match(pattern)
     if (match) {
@@ -62,24 +98,11 @@ function parseText(rawText: string): Omit<ParsedReceipt, 'raw_text' | 'confidenc
     }
   }
 
-  for (const pattern of MERCHANT_PATTERNS) {
-    const match = rawText.match(pattern)
-    if (match) {
-      merchant = match[1].trim()
-      break
-    }
-  }
-
-  if (!merchant && lines.length > 0) {
-    const first = lines[0]
-    if (first.length > 2 && first.length < 60) merchant = first
-  }
-
   return {
     merchant,
     amount,
     date,
-    description: merchant ? `Purchase at ${merchant}` : 'Scanned expense',
+    description: merchant ? `Purchase at ${merchant}` : 'Scanned receipt',
   }
 }
 

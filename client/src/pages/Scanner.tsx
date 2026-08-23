@@ -8,9 +8,11 @@ import type { ScannedReceipt, ExpenseInput } from '@/types'
 
 export function Scanner() {
   const [scanned, setScanned] = useState<Partial<ExpenseInput> | null>(null)
+  const [scanId, setScanId] = useState(0)
   const navigate = useNavigate()
 
   const handleResult = (result: ScannedReceipt) => {
+    setScanId((n) => n + 1)
     setScanned({
       amount: result.amount ?? 0,
       description: result.description ?? '',
@@ -48,7 +50,8 @@ export function Scanner() {
             <CardDescription>Review and edit the extracted info before saving</CardDescription>
           </CardHeader>
           <CardContent>
-            <ExpenseForm prefill={scanned} onSuccess={() => navigate('/expenses')} />
+            {/* key forces a remount so each new scan repopulates the form */}
+            <ExpenseForm key={scanId} prefill={scanned} onSuccess={() => navigate('/expenses')} />
           </CardContent>
         </Card>
       )}
