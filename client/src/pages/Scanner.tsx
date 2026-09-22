@@ -11,13 +11,25 @@ export function Scanner() {
   const navigate = useNavigate()
 
   const handleResult = (result: ScannedReceipt) => {
+    // Server now returns date as YYYY-MM-DD. Accept that directly and only
+    // fall back to Date parsing for legacy responses.
+    let dateStr = format(new Date(), 'yyyy-MM-dd')
+    if (result.date) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(result.date)) {
+        dateStr = result.date
+      } else {
+        try {
+          dateStr = format(new Date(result.date!), 'yyyy-MM-dd')
+        } catch {
+          // keep today
+        }
+      }
+    }
     setScanned({
       amount: result.amount ?? 0,
       description: result.description ?? '',
       merchant: result.merchant ?? '',
-      date: result.date
-        ? (() => { try { return format(new Date(result.date!), 'yyyy-MM-dd') } catch { return format(new Date(), 'yyyy-MM-dd') } })()
-        : format(new Date(), 'yyyy-MM-dd'),
+      date: dateStr,
       category: 'other',
     })
   }
